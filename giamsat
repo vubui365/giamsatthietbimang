@@ -4,202 +4,159 @@ import subprocess
 import platform
 import threading
 import time
-import concurrent.futures  # Thư viện để chạy song song (Multithreading)
 
 class DeviceMonitor:
     def __init__(self, root):
         self.root = root
-        self.root.title("Giám Sát Thiết Bị - High Performance")
-        self.root.geometry("900x550")
+        self.root.title("Giám Sát Thiết Bị - Real-time")
+        self.root.geometry("800x500")
         
-        # --- GIAO DIỆN ---
-        # Header
-        header_frame = tk.Frame(root, bg="#2c3e50", pady=15)
-        header_frame.pack(fill=tk.X)
-        lbl_title = tk.Label(header_frame, text="HỆ THỐNG GIÁM SÁT MẠNG TẬP TRUNG",
-                            font=("Segoe UI", 16, "bold"), bg="#2c3e50", fg="white")
-        lbl_title.pack()
+        # Tiêu đề
+        title = tk.Label(root, text="🖥️ HỆ THỐNG GIÁM SÁT THIẾT BỊ", 
+                        font=("Arial", 16, "bold"), bg="#2c3e50", fg="white", pady=10)
+        title.pack(fill=tk.X)
         
-        # Status Bar
-        self.status_var = tk.StringVar(value="Đang khởi tạo hệ thống...")
-        status_bar = tk.Label(root, textvariable=self.status_var,
-                              font=("Segoe UI", 10), bg="#ecf0f1", fg="#333", anchor="w", padx=10, pady=5)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        # Frame chứa thông tin
+        info_frame = tk.Frame(root, bg="#ecf0f1", pady=5)
+        info_frame.pack(fill=tk.X, padx=10)
         
-        # Treeview (Bảng dữ liệu)
+        self.status_label = tk.Label(info_frame, text="⏱️ Đang khởi động...", 
+                                     font=("Arial", 10), bg="#ecf0f1", fg="#34495e")
+        self.status_label.pack(side=tk.LEFT, padx=10)
+        
+        # Frame chứa Treeview và Scrollbar
         tree_frame = tk.Frame(root)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Scrollbar (Thanh cuộn)
-        self.scrollbar = ttk.Scrollbar(tree_frame, orient="vertical")
+        # Tạo bảng hiển thị
+        self.tree = ttk.Treeview(tree_frame, 
+                                 columns=("STT", "Tên", "IP", "Trạng thái", "Thời gian"), 
+                                 show="headings", height=15)
         
-        columns = ("STT", "Tên Thiết Bị", "IP", "Trạng thái", "Phản hồi (ms)", "Cập nhật lúc")
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
-                                 yscrollcommand=self.scrollbar.set, height=20)
+        # Định nghĩa cột
+        self.tree.heading("STT", text="STT")
+        self.tree.heading("Tên", text="Tên Thiết Bị")
+        self.tree.heading("IP", text="Địa Chỉ IP")
+        self.tree.heading("Trạng thái", text="Trạng Thái")
+        self.tree.heading("Thời gian", text="Cập Nhật Lúc")
         
-        self.scrollbar.config(command=self.tree.yview)
-        self.scrollbar.pack(side="right", fill="y")
-        self.tree.pack(side="left", fill="both", expand=True)
+        # Độ rộng cột
+        self.tree.column("STT", width=50, anchor="center")
+        self.tree.column("Tên", width=200)
+        self.tree.column("IP", width=150, anchor="center")
+        self.tree.column("Trạng thái", width=120, anchor="center")
+        self.tree.column("Thời gian", width=150, anchor="center")
         
-        # Cấu hình cột
-        col_width = {
-            "STT": 50, "Tên Thiết Bị": 200, "IP": 150,
-            "Trạng thái": 120, "Phản hồi (ms)": 100, "Cập nhật lúc": 120
-        }
-        for col, width in col_width.items():
-            self.tree.column(col, width=width, anchor="center" if col != "Tên Thiết Bị" else "w")
-            self.tree.heading(col, text=col)
+        # Thanh cuộn
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
         
-        # Màu sắc
-        self.tree.tag_configure("online", background="#d4edda", foreground="#155724")  # Xanh lá
-        self.tree.tag_configure("offline", background="#f8d7da", foreground="#721c24")  # Đỏ
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # --- DỮ LIỆU & XỬ LÝ ---
+        # Màu sắc cho trạng thái
+        self.tree.tag_configure("online", background="#d4edda", foreground="#155724")
+        self.tree.tag_configure("offline", background="#f8d7da", foreground="#721c24")
+        
+        # Đọc danh sách thiết bị
         self.devices = self.load_devices()
-        self.item_ids = {}  # Map IP -> Item ID trong Treeview
+        self.device_items = {}  # Lưu ID của từng item trong tree
         
-        # Tạo bảng ban đầu (Chỉ chạy 1 lần duy nhất để tránh nhảy màn hình)
-        self.init_table()
+        # Tạo danh sách ban đầu
+        self.init_display()
         
-        # Cờ kiểm soát luồng
-        self.is_running = True
+        # Bắt đầu giám sát
         self.start_monitoring()
     
     def load_devices(self):
-        """Load danh sách hoặc tạo dữ liệu mẫu"""
+        """Đọc danh sách thiết bị từ file"""
         devices = []
         try:
             with open("D:\\danhsach.txt", "r", encoding="utf-8") as f:
                 for line in f:
-                    if "," in line:
+                    line = line.strip()
+                    if line and "," in line:
                         name, ip = line.split(",", 1)
                         devices.append({"name": name.strip(), "ip": ip.strip()})
         except FileNotFoundError:
-            # Dữ liệu mẫu (nhiều dòng để test cuộn chuột)
-            for i in range(1, 31):
-                devices.append({"name": f"Camera Khu Vực {i}", "ip": f"192.168.1.{100+i}"})
-            # Thêm vài IP thật để test
-            devices.insert(0, {"name": "Google DNS", "ip": "8.8.8.8"})
-            devices.insert(1, {"name": "Cloudflare", "ip": "1.1.1.1"})
-            devices.insert(2, {"name": "Localhost", "ip": "127.0.0.1"})
-        
+            print("⚠️ Không tìm thấy file D:\\danhsach.txt")
         return devices
     
-    def init_table(self):
-        """Khởi tạo các dòng trong bảng. TUYỆT ĐỐI KHÔNG XÓA ĐI TẠO LẠI."""
-        for idx, dev in enumerate(self.devices, 1):
-            item_id = self.tree.insert("", "end", values=(
-                idx, dev["name"], dev["ip"], "⏳ Đang tải...", "--", "--"
-            ))
-            self.item_ids[dev["ip"]] = item_id
+    def init_display(self):
+        """Tạo danh sách thiết bị ban đầu"""
+        for idx, device in enumerate(self.devices, 1):
+            item_id = self.tree.insert("", tk.END, 
+                                      values=(idx, device["name"], device["ip"], 
+                                             "⏳ Đang kiểm tra...", "---"))
+            self.device_items[device["ip"]] = item_id
     
-    def check_ping(self, device):
-        """Hàm thực hiện ping (Chạy trong thread con)"""
-        ip = device["ip"]
+    def ping_device(self, ip):
+        """Kiểm tra thiết bị online hay offline"""
         param = "-n" if platform.system().lower() == "windows" else "-c"
-        # Timeout cực ngắn (500ms) để phản hồi nhanh
-        command = ["ping", param, "1", "-w", "500", ip]
+        command = ["ping", param, "1", "-w", "1000", ip]
         
         try:
-            # Đo thời gian phản hồi giả lập (hoặc parse từ output ping nếu cần kỹ hơn)
-            start_t = time.time()
-            res = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            end_t = time.time()
-            
-            ms = int((end_t - start_t) * 1000) if res.returncode == 0 else 0
-            return {
-                "ip": ip,
-                "is_online": res.returncode == 0,
-                "ms": ms
-            }
+            result = subprocess.run(command, stdout=subprocess.PIPE, 
+                                  stderr=subprocess.PIPE, timeout=2)
+            return result.returncode == 0
         except:
-            return {"ip": ip, "is_online": False, "ms": 0}
+            return False
     
-    def update_ui_row(self, result):
-        """Cập nhật 1 dòng cụ thể - CHỈ chạy trên Main Thread"""
-        ip = result["ip"]
-        item_id = self.item_ids.get(ip)
+    def update_device_status(self, idx, device):
+        """Cập nhật trạng thái của từng thiết bị"""
+        is_online = self.ping_device(device["ip"])
+        status = "🟢 ONLINE" if is_online else "🔴 OFFLINE"
+        current_time = time.strftime("%H:%M:%S")
+        tag = "online" if is_online else "offline"
         
-        if not item_id: return
+        item_id = self.device_items.get(device["ip"])
         
-        # Dữ liệu mới
-        status_text = "🟢 ONLINE" if result["is_online"] else "🔴 OFFLINE"
-        tag = "online" if result["is_online"] else "offline"
-        ms_text = f"{result['ms']} ms" if result["is_online"] else "Timeout"
-        curr_time = time.strftime("%H:%M:%S")
+        if item_id:
+            # Cập nhật giá trị mà KHÔNG thay đổi focus
+            self.tree.item(item_id, 
+                          values=(idx, device["name"], device["ip"], status, current_time),
+                          tags=(tag,))
         
-        # Lấy dữ liệu cũ
-        old_values = self.tree.item(item_id, "values")
-        
-        # So sánh: Nếu trạng thái chưa đổi thì chỉ cập nhật thời gian (giảm flicker)
-        # old_values[3] là cột Trạng thái
-        if old_values[3] == status_text:
-            # Chỉ cập nhật ping và thời gian, giữ nguyên các cột khác
-            new_values = (old_values[0], old_values[1], ip, status_text, ms_text, curr_time)
-        else:
-            # Cập nhật toàn bộ nếu trạng thái đổi
-            new_values = (old_values[0], old_values[1], ip, status_text, ms_text, curr_time)
-        
-        # Cập nhật vào Treeview
-        self.tree.item(item_id, values=new_values, tags=(tag,))
+        return is_online
     
-    def batch_update_ui(self, results, online_cnt, offline_cnt):
-        # Lưu vị trí cuộn hiện tại
-        scroll_pos = self.tree.yview()[0]
+    def update_all_devices(self):
+        """Cập nhật tất cả thiết bị MÀ KHÔNG LÀM CUỘN MÀN HÌNH"""
         
-        # Cập nhật tất cả các hàng
-        for result in results:
-            self.update_ui_row(result)
+        # LƯU VỊ TRÍ CUỘN HIỆN TẠI
+        scroll_position = self.tree.yview()
         
-        # Khôi phục vị trí cuộn
-        self.tree.yview_moveto(scroll_pos)
+        online_count = 0
+        offline_count = 0
+        
+        # Cập nhật từng thiết bị
+        for idx, device in enumerate(self.devices, 1):
+            is_online = self.update_device_status(idx, device)
+            if is_online:
+                online_count += 1
+            else:
+                offline_count += 1
+        
+        # KHÔI PHỤC LẠI VỊ TRÍ CUỘN
+        self.tree.yview_moveto(scroll_position[0])
         
         # Cập nhật thanh trạng thái
-        total_dev = len(self.devices)
-        msg = f"Tổng: {total_dev} | 🟢 Online: {online_cnt} | 🔴 Offline: {offline_cnt} | ♻️ Tự động làm mới sau 5s"
-        self.status_var.set(msg)
-    
-    def monitoring_loop(self):
-        """Vòng lặp chính quản lý ThreadPool"""
-        while self.is_running:
-            # SỬ DỤNG THREAD POOL ĐỂ PING SONG SONG
-            # Max_workers=20 nghĩa là ping 20 thiết bị cùng 1 lúc
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-                # Gửi tất cả lệnh ping vào pool
-                futures = [executor.submit(self.check_ping, dev) for dev in self.devices]
-                
-                # Chờ tất cả hoàn thành và thu thập kết quả
-                results = []
-                online_cnt = 0
-                offline_cnt = 0
-                for future in futures:
-                    if not self.is_running: return
-                    result = future.result()
-                    results.append(result)
-                    if result["is_online"]:
-                        online_cnt += 1
-                    else:
-                        offline_cnt += 1
-            
-            # Đẩy việc cập nhật giao diện về Main Thread (batch update để tránh flicker và cuộn)
-            if self.is_running:
-                self.root.after(0, self.batch_update_ui, results, online_cnt, offline_cnt)
-            
-            # Nghỉ 5 giây (đếm lùi để có thể tắt app mượt mà)
-            for _ in range(50):
-                if not self.is_running: break
-                time.sleep(0.1)
+        total = len(self.devices)
+        status_text = f"📊 Tổng: {total} thiết bị | 🟢 Online: {online_count} | 🔴 Offline: {offline_count} | ⏱️ Cập nhật: {time.strftime('%H:%M:%S')}"
+        self.status_label.config(text=status_text)
     
     def start_monitoring(self):
-        t = threading.Thread(target=self.monitoring_loop, daemon=True)
-        t.start()
+        """Bắt đầu giám sát liên tục"""
+        def monitor_loop():
+            time.sleep(2)  # Đợi 2 giây trước khi bắt đầu
+            while True:
+                self.update_all_devices()
+                time.sleep(5)  # Cập nhật mỗi 5 giây
         
-    def on_close(self):
-        self.is_running = False
-        self.root.destroy()
+        thread = threading.Thread(target=monitor_loop, daemon=True)
+        thread.start()
 
+# Chạy chương trình
 if __name__ == "__main__":
     root = tk.Tk()
     app = DeviceMonitor(root)
-    root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
